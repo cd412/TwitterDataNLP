@@ -1,0 +1,289 @@
+---
+title: Home Work 3 (Case Study 1) – Collecting, Manipulating and Blending Data from Twitter
+author:
+- "Christopher Defreitas"
+- "DS501 - Introduction to Data Science"
+output:
+  html_document: default
+  pdf_document: default
+---
+## Introduction
+- This report describes analysis done on Twitter data using R
+- The twitter package that was used is rtweet
+- This package can be downloaded here: https://github.com/mkearney/rtweet
+
+## Problem 1: Sampling Twitter Data with Streaming API about a certain topic
+- The topic used to collect data for this analysis was Bitcoin. Bitcoin is a cryptocurrency that is traded on online exchanges. This is an interesting topic because the market for Bitcoin is highly volatile and subject to social events. The market is dominated by two main categories of emotions known as FUD (fear, uncertainty, and doubt) and FOMO (fear of missing out). The ability to mine twitter activity to extract the current sentiment of the market would be valuable for modeling the price of Bitcoin. This analysis lays some of the ground work for that larger goal.
+- The tweets that are collected will be stored in a local text file.
+
+```{r, echo=F}
+consumerKey = "SKfDBEyQtANTA6bCO7JOG7fvj"
+consumerSecret = "MZn3epx5mZAmuD1R427wFLqU8T3GW6kEYEDqrlDEZLsODwQJ3i"
+accessToken = "915378217120403458-7XesmVzFJx593pbeeDNECUy1Zvy647y"
+accessTokenSecret = "DCEolSf4NYTa7uPxRvCSNcSA3CJiv4WtHKPaY6qI57STQ"
+```
+
+
+```{r, echo=F}
+library(rtweet)
+library(stringr)
+
+## authenticate via web browser
+token <- create_token(
+  app = "DS501-CaseStudy",
+  consumer_key = consumerKey,
+  consumer_secret = consumerSecret,
+  access_token = accessToken,
+  access_secret = accessTokenSecret)
+```
+
+- The data is collected using the twitter API. It will include 500 tweets and will not exclude retweets. The results will include tweets that would be returned by searching for bitcoin on the twitter homepage. Each row of the dataframe contains the tweet, characteristics about the tweet, and information about the users involved in the tweet.
+
+```{r}
+## request tweets
+df = data.frame()
+df = search_tweets('bitcoin', n=500, lang='en', include_rts=T)
+
+## save data to unique file name
+timestamp_str = format(Sys.time(), "%Y%m%d%H%M%S")
+fname = paste0("TwitterData", timestamp_str, '.csv')
+rtweet::write_as_csv(df, fname)
+```
+
+```{r}
+nrow(df)
+```
+
+```{r}
+paste("Time range for tweets collected: ", min(df$created_at), "-", max(df$created_at))
+```
+
+
+
+Report some statistics about the tweets you collected
+
+- The topic of interest: Bitcoin
+- The total number of tweets collected: 500
+- The time range for data collection is 2019-09-19 02:21:06 - 2019-09-19 02:41:31
+- The price of Bitcoin at this time $10,161 USD
+
+## Problem 2: Analyzing Tweets and Tweet Entities with Frequency Analysis
+
+**1. Word Count:** 
+
+- The most important step in text mining is data cleaning. Several steps were taken to clean the data before analyzing the word count. The purpose of this is to make sure that the analysis is not thrown off by bad data formatting.
+- Data cleaning steps include removing line breaks, removing urls, removing punctuation, and removing non-ASCII characters. In this case the non-ASCII characters are mainly emojis.
+
+```{r}
+library(stringr)
+# Remove line breaks from text. Replacing with spaces.
+df$clean_text = str_replace_all(df$text, "[\r\n]" , " ")
+
+# Remove links
+library (devtools)
+#install_github("trinker/qdapRegex")
+library(qdapRegex) 
+df$clean_text = rm_url(df$clean_text, pattern=pastex("@rm_twitter_url", "@rm_url"))
+
+# Remove punctuation
+df$clean_text = str_replace_all(df$clean_text, "[\"():;\\-]" , " ")
+df$clean_text = str_replace_all(df$clean_text, "[.,!?|+#$]" , "")
+
+# Remove non-ascii characters (emojis)
+df$clean_text = gsub("[^\x01-\x7F]", "", df$clean_text)
+```
+
+```{r}
+show(df[,c('clean_text', 'text')])
+```
+
+- The next step is to separate the cleaned tweets into individual words.
+- The words are tokenized by splitting on white-space, and converting all characters to lower case.
+
+```{r}
+# Create a column of words
+df$word = str_split(df$clean_text, ' +')
+
+# Create dataframe with a row for each status, and a list of words
+words_df = df[,c('status_id', 'word')]
+library(tidyr)
+words_df = unnest(words_df, word)
+
+# Make all characters lowercase
+words_df$word = tolower(words_df$word)
+```
+
+- Stop words are words that are very common in the target language and do not contribute much to the meaning of the sentence. 
+- Removing these words allows the analysis to focus on only words that are related to the subject of the message.
+
+```{r, echo=F}
+# Remove stopwords
+library(tidytext)
+library(tidyverse)
+# install.packages('tidyverse')
+
+twitter_stopwords = tidytext::get_stopwords()
+
+words_df = anti_join(words_df, twitter_stopwords, by=c('word'))
+```
+
+```{r, echo=F}
+# Compute the count of the words
+library(plyr)
+word_count = plyr::count(words_df$word)
+```
+
+```{r}
+library(dplyr)
+word_count = dplyr::arrange(word_count, desc(freq))
+```
+
+- After counting the frequency of each word, there is a chance to do more data cleaning. 
+- Numbers, percentages, and encodings are removed. User mentions are also removed because there were not found to contribute specifically to the topics of the tweets. Regular expressions are used to remove these words because they follow a specific format that is easy to detect.
+
+```{r}
+# Remove Numbers, percentages, and encodings (&amp)
+word_count = word_count[grep("^[0-9]*$|^[0-9]*%$|^[0-9]*k$|&[a-z]*", word_count$x, invert = TRUE) , ]
+
+# Remove user metions
+word_count = word_count[grep("^@[0-z]*$", word_count$x, invert = TRUE) , ]
+```
+
+
+- Display a table of the top 30 words with their counts
+```{r}
+top_30_words = word_count[1:30,]
+show(top_30_words)
+```
+
+- The word cloud shows the most common words used in this collection of tweets. It is no surprise the bitcoin is the most common word because it was the search term.
+
+```{r}
+#install.packages("wordcloud") # word-cloud generator 
+#install.packages("RColorBrewer") # color palettes
+library("wordcloud")
+library("RColorBrewer")
+wordcloud(words = word_count$x, freq = word_count$freq, min.freq = 15,
+          max.words=200, random.order=F, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+
+
+**2. Find the most popular tweets in your collection of tweets**
+
+- Two very common theme in the cryptocurrency community are giveaways. This is a way for a member of the community to generate a lot of attention by offering to give away money. When looking at the most retweeted tweets in the collection it is clear that giveaways that offer to give money to users who retweet their status are able to collect a large amount of retweets.
+```{r}
+# Most Retweets
+
+df_retweets = df[df$is_retweet,]
+
+df_retweets = df_retweets[!duplicated(df_retweets$retweet_status_id),]
+
+show(dplyr::arrange(df_retweets, desc(retweet_count))[1:10,c('text', 'favorite_count', 'retweet_count')])
+```
+
+- The amount of favorited tweets in this data-set is very low because the tweets are streamed into the application. There is very little time for users to favorite a post. This also leads to slightly older posts having higher number of favorites. For this analysis the favorites on a very recent tweet should not be given much consideration.
+
+```{r}
+# Most Favorited Tweets
+
+show(dplyr::arrange(df[!df$is_retweet,], desc(favorite_count))[1:10,c('text', 'favorite_count', 'retweet_count')])
+```
+
+**3. Find the most popular Tweet Entities in your collection of tweets**
+
+Please display a table of the top 10 hashtags, top 10 user mentions that are the most popular in your collection of tweets.
+
+
+```{r}
+## define as a function
+getTopListColumn <- function(d, colname, n, wc_min_freq){
+  
+  d = d[,c('status_id', colname)]
+  names(d) = c('status_id', 'x')
+  
+  # Flatten lists of elements into individual rows
+  d = tidyr::unnest(d)
+  
+  # Convert  to lower case
+  d$x = tolower(d$x)
+  
+  # Remove blanks
+  d = d[!is.na(d$x),]  
+  
+  # Count hashtags
+  d_count = plyr::count(d$x)
+  
+  # Show the top n most popular elements
+  top = dplyr::arrange(d_count, desc(freq))[1:n,]
+  show(top)
+  
+  wordcloud(words = d_count$x, freq = d_count$freq, min.freq = wc_min_freq,
+          max.words=200, random.order=F, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+}
+```
+
+```{r}
+getTopListColumn(df, 'hashtags', 10, 8)
+```
+
+- In the cryptocurrency-twitter world, the ticker symbols for a currency are often tagged in tweets in a similar way to hashtags. They are preceded by a '$' and serve as a consistent hashtag for cryptocurrency markets.
+
+```{r}
+getTopListColumn(df, 'symbols', 10, 1)
+```
+
+```{r}
+getTopListColumn(df, 'mentions_screen_name', 10, 10)
+```
+
+
+## Problem 3: Getting any 20 friends and any 20 followers of a popular user in twitter
+
+- The popular user account used for this analysis is the Trevon James https://twitter.com/BitcoinTre
+- James is a popular youtube personality in the cryptocurrency community. He was an avid promoted of the popular ponzi scheme named bitconnect [https://fortune.com/2018/01/17/bitcoin-bitconnect-price-scam/].
+- Get the list of all friends and all followers of the twitter user.
+- Display 20 out of the followers, Display their ID numbers and screen names in a table.
+- Display 20 out of the friends (if the user has more than 20 friends), Display their ID numbers and screen names in a table.
+- Compute the mutual friends within the two groups, i.e., the users who are in both friend list and follower list, Display their ID numbers and screen names in a table
+```{r}
+user = rtweet::lookup_users('BitcoinTre')
+user_id = user[1,'user_id'][[1]]
+```
+
+
+```{r}
+# Collect followers and friends
+print(paste0("Number of friends of ", user$screen_name, ': ', user$friends_count))
+friends = rtweet::get_friends(user_id, n=user$friends_count, retryonratelimit = TRUE)['user_id']
+nrow(friends)
+
+print(paste0("Number of followers of ", user$screen_name, ': ', user$followers_count))
+followers = rtweet::get_followers(user_id, n=user$followers_count, retryonratelimit = T) # Change retryonratelimit to TRUE to collect the full list of followers.
+nrow(followers)
+```
+
+```{r}
+# Preview the account data for the followers and friends
+show(rtweet::lookup_users(followers$user_id)[,c('screen_name','user_id')])
+show(rtweet::lookup_users(friends$user_id)[,c('screen_name','user_id')])
+```
+
+
+```{r}
+# Find followers who are also friends
+f_and_f = dplyr::inner_join(followers, friends, by='user_id', suffix=c('.followers', '.friends'))
+nrow(f_and_f)
+```
+
+```{r}
+# Collect account data
+f_and_f = rtweet::lookup_users(f_and_f$user_id)
+
+# Show the users who are friends with and follow the user. Showing most followed users first.
+f_and_f = dplyr::arrange(f_and_f, desc(f_and_f$followers_count))
+show(f_and_f[1:20,c('screen_name', 'location', 'verified', 'followers_count', 'friends_count')])
+```
+
